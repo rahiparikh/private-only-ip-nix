@@ -1,0 +1,48 @@
+- name: get list of available interfaces
+  set_fact:
+    host_network_interfaces: "{{ hostvars[ansible_fqdn]['ansible_' ~ item] }}"
+  with_items: "{{ ansible_interfaces | map('replace', '-','_') | list }}"
+
+- name: debug print all interface ipv4 data
+  set_fact:
+    host_network_interfaces_public: "{{ item['device'] if (item['ipv4']['address'] | ipaddr('public')) else [] }}"
+  with_items:
+    - "{{ host_network_interfaces }}"
+  when:
+    - item['ipv4'] is defined
+
+- name: disable public interfaces (ip link)
+  command: ip link set dev "{{ item }}" down
+  register: host_network_changed
+  with_items:
+    - "{{ host_network_interfaces_public }}"
+  when:
+    - item is defined
+
+- name: disable public interfaces (if config)
+  command: ifconfig "{{ item }}" down
+  register: host_network_changed
+  with_items:
+    - "{{ host_network_interfaces_public }}"
+  when:
+    - item is defined
+
+- name: reboot to complete interface change
+  shell: sleep 2 && shutdown -r now "rebooting to complete interface change"
+  async: 1
+  poll: 0
+  ignore_errors: true
+  become: true
+  when: host_network_changed.changed
+
+- name: wait for host to reboot
+  wait_for:
+    host: "{{ inventory_hostname }}"
+    port: 22
+    state: started
+    search_regex: OpenSSH
+    delay: 10
+  vars:
+    ansible_connection: local
+  become: false
+  when: host_network_changed.changed
